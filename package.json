@@ -1,0 +1,49 @@
+{
+  "name": "ci-cd-level3",
+  "version": "1.0.0",
+  "description": "Professional-grade CI/CD project with comprehensive testing and deployment automation",
+  "main": "src/index.js",
+  "engines": {
+    "node": ">=14.0.0",
+    "npm": ">=6.0.0"
+  },
+  "scripts": {
+    "start": "node src/index.js",
+    "dev": "NODE_ENV=development nodemon src/index.js",
+    "test": "jest --coverage",
+    "test:watch": "jest --watch",
+    "test:ci": "jest --ci --coverage --maxWorkers=2",
+    "lint": "eslint src tests",
+    "lint:fix": "eslint src tests --fix",
+    "format": "prettier --write \"src/**/*.js\" \"tests/**/*.js\" \"*.js\"",
+    "format:check": "prettier --check \"src/**/*.js\" \"tests/**/*.js\" \"*.js\"",
+    "build": "echo 'Build completed successfully'",
+    "prepare": "husky install",
+    "precommit": "lint-staged",
+    "validate": "npm run lint && npm run format:check && npm test"
+  },
+  "keywords": [
+    "ci-cd",
+    "nodejs",
+    "express",
+    "automation",
+    "github-actions"
+  ],
+  "author": "Your Name",
+  "license": "MIT",
+  "dependencies": {
+    "dotenv": "^16.3.1",
+    "express": "^4.18.2",
+    "winston": "^3.11.0"
+  },
+  "devDependencies": {
+    "eslint": "^8.57.1",
+    "eslint-config-prettier": "^9.0.0",
+    "husky": "^8.0.3",
+    "jest": "^29.7.0",
+    "lint-staged": "^15.1.0",
+    "nodemon": "^3.0.2",
+    "prettier": "^3.1.0",
+    "supertest": "^6.3.3"
+  }
+}

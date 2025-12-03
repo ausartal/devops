@@ -1,0 +1,15 @@
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: dev-ahmad
+  labels:
+    environment: development
+    managed-by: drone-ci
+---
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: staging-ahmad
+  labels:
+    environment: staging
+    managed-by: drone-ci

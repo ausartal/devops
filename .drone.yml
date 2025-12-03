@@ -1,0 +1,232 @@
+---
+kind: pipeline
+type: docker
+name: ci-cd-level3-pipeline
+
+# Global environment variables
+environment:
+  DOCKER_REGISTRY: harbor.example.com
+  IMAGE_NAME: ci-cd-app
+  STUDENT_NAME: ahmad
+
+# Trigger configuration
+trigger:
+  branch:
+    - main
+    - staging
+  event:
+    - push
+    - pull_request
+
+steps:
+  # ========================================================
+  # STAGE 1: BUILD
+  # ========================================================
+  - name: build
+    image: node:18-alpine
+    commands:
+      - echo "========================================="
+      - echo "STAGE 1: Building Application"
+      - echo "========================================="
+      - echo "Branch: $DRONE_BRANCH"
+      - echo "Commit: $DRONE_COMMIT_SHA"
+      - npm ci
+      - npm run lint
+      - npm test
+      - npm run build
+      - echo "✅ Build completed successfully"
+    when:
+      branch:
+        - main
+        - staging
+
+  # ========================================================
+  # STAGE 2: PUBLISH TO DOCKER REGISTRY
+  # ========================================================
+  - name: publish
+    image: plugins/docker
+    settings:
+      registry: ${DOCKER_REGISTRY}
+      repo: ${DOCKER_REGISTRY}/library/${IMAGE_NAME}
+      username:
+        from_secret: docker_username
+      password:
+        from_secret: docker_password
+      tags:
+        - ${DRONE_BRANCH}-${DRONE_COMMIT_SHA:0:8}
+        - ${DRONE_BRANCH}-latest
+      dockerfile: Dockerfile
+      context: .
+    when:
+      branch:
+        - main
+        - staging
+      event:
+        - push
+
+  # ========================================================
+  # STAGE 3: TRIVY SECURITY SCAN (QUALITY GATE)
+  # ========================================================
+  - name: trivy-scan
+    image: aquasec/trivy:latest
+    environment:
+      IMAGE_TAG: ${DRONE_BRANCH}-${DRONE_COMMIT_SHA:0:8}
+      TRIVY_USERNAME:
+        from_secret: docker_username
+      TRIVY_PASSWORD:
+        from_secret: docker_password
+    commands:
+      - echo "========================================="
+      - echo "STAGE 3: Trivy Security Scanning"
+      - echo "========================================="
+      - echo "Scanning image: ${DOCKER_REGISTRY}/library/${IMAGE_NAME}:${DRONE_BRANCH}-${DRONE_COMMIT_SHA:0:8}"
+      - |
+        trivy image \
+          --username "$TRIVY_USERNAME" \
+          --password "$TRIVY_PASSWORD" \
+          --severity HIGH,CRITICAL \
+          --exit-code 1 \
+          --no-progress \
+          --format table \
+          ${DOCKER_REGISTRY}/library/${IMAGE_NAME}:${DRONE_BRANCH}-${DRONE_COMMIT_SHA:0:8}
+      - echo "✅ Security scan passed - No HIGH/CRITICAL vulnerabilities found"
+    when:
+      branch:
+        - main
+        - staging
+      event:
+        - push
+    # Pipeline FAILS if Trivy finds HIGH/CRITICAL vulnerabilities (exit-code 1)
+
+  # STAGE 4A: DEPLOY TO DEV (AUTOMATIC)
+  - name: deploy-to-dev
+    image: bitnami/kubectl:latest
+    environment:
+      NAMESPACE: dev-${STUDENT_NAME}
+      IMAGE_TAG: ${DRONE_BRANCH}-${DRONE_COMMIT_SHA:0:8}
+      KUBE_CONFIG:
+        from_secret: kube_config
+    commands:
+      - echo "========================================="
+      - echo "STAGE 4A: Deploy to DEV Namespace"
+      - echo "========================================="
+      - echo "Namespace: dev-${STUDENT_NAME}"
+      - echo "Image: ${DOCKER_REGISTRY}/library/${IMAGE_NAME}:${DRONE_BRANCH}-${DRONE_COMMIT_SHA:0:8}"
+      # Setup kubectl with base64 decode
+      - mkdir -p ~/.kube
+      - echo "$KUBE_CONFIG" | base64 --decode > ~/.kube/config
+      - chmod 600 ~/.kube/config
+      # Create namespace if not exists
+      - kubectl create namespace dev-${STUDENT_NAME} --dry-run=client -o yaml | kubectl apply -f -
+      # Apply deployment with new image
+      - sed "s|IMAGE_PLACEHOLDER|${DOCKER_REGISTRY}/library/${IMAGE_NAME}:${IMAGE_TAG}|g" k8s/deployment.yaml | kubectl apply -f - -n dev-${STUDENT_NAME}
+      - kubectl apply -f k8s/service.yaml -n dev-${STUDENT_NAME}
+      # Wait for rollout
+      - kubectl rollout status deployment/ci-cd-app -n dev-${STUDENT_NAME} --timeout=300s
+      # Show deployment info
+      - kubectl get pods -n dev-${STUDENT_NAME}
+      - kubectl get svc -n dev-${STUDENT_NAME}
+      - echo "✅ Deployment to DEV completed successfully"
+    when:
+      branch:
+        - main
+      event:
+        - push
+
+  # STAGE 4B: DEPLOY TO STAGING (MANUAL APPROVAL REQUIRED
+  - name: deploy-to-staging
+    image: bitnami/kubectl:latest
+    environment:
+      NAMESPACE: staging-${STUDENT_NAME}
+      IMAGE_TAG: ${DRONE_BRANCH}-${DRONE_COMMIT_SHA:0:8}
+      KUBE_CONFIG:
+        from_secret: kube_config
+    commands:
+      - echo "========================================="
+      - echo "STAGE 4B: Deploy to STAGING Namespace"
+      - echo "========================================="
+      - echo "MANUAL APPROVAL WAS GRANTED"
+      - echo "Namespace: staging-${STUDENT_NAME}"
+      - echo "Image: ${DOCKER_REGISTRY}/library/${IMAGE_NAME}:${DRONE_BRANCH}-${DRONE_COMMIT_SHA:0:8}"
+      # Setup kubectl with base64 decode
+      - mkdir -p ~/.kube
+      - echo "$KUBE_CONFIG" | base64 --decode > ~/.kube/config
+      - chmod 600 ~/.kube/config
+      # Create namespace if not exists
+      - kubectl create namespace staging-${STUDENT_NAME} --dry-run=client -o yaml | kubectl apply -f -
+      # Apply RBAC (ServiceAccount, Role, RoleBinding)
+      - kubectl apply -f k8s/rbac.yaml -n staging-${STUDENT_NAME}
+      # Apply deployment with new image (using ServiceAccount)
+      - sed "s|IMAGE_PLACEHOLDER|${DOCKER_REGISTRY}/library/${IMAGE_NAME}:${IMAGE_TAG}|g" k8s/deployment.yaml | kubectl apply -f - -n staging-${STUDENT_NAME}
+      - kubectl apply -f k8s/service.yaml -n staging-${STUDENT_NAME}
+      # Wait for rollout
+      - kubectl rollout status deployment/ci-cd-app -n staging-${STUDENT_NAME} --timeout=300s
+      # Show deployment info
+      - kubectl get pods -n staging-${STUDENT_NAME}
+      - kubectl get svc -n staging-${STUDENT_NAME}
+      - echo "✅ Deployment to STAGING completed successfully"
+      - echo ""
+      - echo "🔐 RBAC Validation:"
+      - echo "Run the following command to verify PoLP (Principle of Least Privilege):"
+      - echo "kubectl delete deployment ci-cd-app -n staging-${STUDENT_NAME} --as=system:serviceaccount:staging-${STUDENT_NAME}:drone-deployer"
+      - echo "Expected result: Error from server (Forbidden) - This proves minimal RBAC is working!"
+    when:
+      branch:
+        - staging
+      event:
+        - push
+    depends_on:
+      - trivy-scan
+      
+  # NOTIFICATION (Optional but professional)
+  - name: notify
+    image: plugins/slack
+    settings:
+      webhook:
+        from_secret: slack_webhook
+      channel: deployments
+      template: |
+        {{#success build.status}}
+          Build #{{build.number}} succeeded!
+          Branch: {{build.branch}}
+          Commit: {{build.commit}}
+          Author: {{build.author}}
+        {{else}}
+          Build #{{build.number}} failed!
+          Branch: {{build.branch}}
+          Commit: {{build.commit}}
+          Author: {{build.author}}
+        {{/success}}
+    when:
+      status:
+        - success
+        - failure
+
+---
+# Promotion configuration untuk manual approval staging
+kind: pipeline
+type: docker
+name: promote-to-staging
+
+trigger:
+  event:
+    - promote
+  target:
+    - staging
+
+steps:
+  - name: deploy-to-staging-promoted
+    image: bitnami/kubectl:latest
+    environment:
+      NAMESPACE: staging-ahmad
+      KUBE_CONFIG:
+        from_secret: kube_config
+    commands:
+      - echo "Deploying to staging via promotion..."
+      - mkdir -p ~/.kube
+      - echo "$KUBE_CONFIG" | base64 --decode > ~/.kube/config
+      - chmod 600 ~/.kube/config
+      - kubectl apply -f k8s/rbac.yaml -n staging-ahmad
+      - kubectl apply -f k8s/deployment.yaml -n staging-ahmad
+      - kubectl apply -f k8s/service.yaml -n staging-ahmad
+      - kubectl rollout status deployment/ci-cd-app -n staging-ahmad --timeout=300s

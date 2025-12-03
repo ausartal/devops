@@ -1,0 +1,113 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: ci-cd-app
+  labels:
+    app: ci-cd-app
+    version: v1
+    managed-by: drone-ci
+spec:
+  replicas: 2
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxSurge: 1
+      maxUnavailable: 0
+  selector:
+    matchLabels:
+      app: ci-cd-app
+  template:
+    metadata:
+      labels:
+        app: ci-cd-app
+        version: v1
+    spec:
+      # ========================================================
+      # SECURITY: ServiceAccount with minimal RBAC permissions
+      # ========================================================
+      serviceAccountName: drone-deployer
+      
+      # ========================================================
+      # SECURITY: ImagePullSecret for private registry
+      # This assumes the secret 'harbor-registry-secret' exists
+      # ========================================================
+      imagePullSecrets:
+        - name: harbor-registry-secret
+      
+      # ========================================================
+      # SECURITY: Security Context (best practices)
+      # ========================================================
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000
+        fsGroup: 1000
+        seccompProfile:
+          type: RuntimeDefault
+      
+      containers:
+        - name: ci-cd-app
+          # This placeholder is replaced by Drone pipeline
+          image: IMAGE_PLACEHOLDER
+          imagePullPolicy: Always
+          
+          ports:
+            - name: http
+              containerPort: 3000
+              protocol: TCP
+          
+          # ========================================================
+          # SECURITY: Container-level security context
+          # ========================================================
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: false
+            runAsNonRoot: true
+            runAsUser: 1000
+            capabilities:
+              drop:
+                - ALL
+              add:
+                - NET_BIND_SERVICE
+          
+          # ========================================================
+          # Environment variables
+          # ========================================================
+          env:
+            - name: NODE_ENV
+              value: "production"
+            - name: PORT
+              value: "3000"
+            - name: LOG_LEVEL
+              value: "info"
+          
+          # ========================================================
+          # Health checks
+          # ========================================================
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: http
+            initialDelaySeconds: 30
+            periodSeconds: 10
+            timeoutSeconds: 5
+            failureThreshold: 3
+          
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: http
+            initialDelaySeconds: 10
+            periodSeconds: 5
+            timeoutSeconds: 3
+            failureThreshold: 3
+          
+          # ========================================================
+          # Resource limits (best practice)
+          # ========================================================
+          resources:
+            requests:
+              memory: "128Mi"
+              cpu: "100m"
+            limits:
+              memory: "512Mi"
+              cpu: "500m"

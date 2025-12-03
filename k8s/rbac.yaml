@@ -1,0 +1,80 @@
+---
+# ServiceAccount for Drone CI deployments
+# This account has MINIMAL permissions (PoLP - Principle of Least Privilege)
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: drone-deployer
+  namespace: staging-ahmad
+
+---
+# Role with MINIMAL permissions
+# CAN: get, list, watch, update, patch deployments
+# CANNOT: delete deployments (proves PoLP)
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: deployment-manager
+  namespace: staging-ahmad
+rules:
+  # Deployment permissions (NO DELETE)
+  - apiGroups: ["apps"]
+    resources: ["deployments"]
+    verbs: ["get", "list", "watch", "create", "update", "patch"]
+  
+  # ReplicaSet permissions (needed for rollouts)
+  - apiGroups: ["apps"]
+    resources: ["replicasets"]
+    verbs: ["get", "list", "watch"]
+  
+  # Pod permissions (read-only for monitoring)
+  - apiGroups: [""]
+    resources: ["pods"]
+    verbs: ["get", "list", "watch"]
+  
+  # Pod logs (for debugging)
+  - apiGroups: [""]
+    resources: ["pods/log"]
+    verbs: ["get", "list"]
+
+---
+# RoleBinding connects ServiceAccount to Role
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: drone-deployer-binding
+  namespace: staging-ahmad
+subjects:
+  - kind: ServiceAccount
+    name: drone-deployer
+    namespace: staging-ahmad
+roleRef:
+  kind: Role
+  name: deployment-manager
+  apiGroup: rbac.authorization.k8s.io
+
+---
+# ========================================================
+# TESTING PoLP (Principle of Least Privilege)
+# ========================================================
+# To verify that the ServiceAccount CANNOT delete deployments:
+#
+# 1. Try to delete deployment using the ServiceAccount:
+#    kubectl delete deployment ci-cd-app -n staging-ahmad \
+#      --as=system:serviceaccount:staging-ahmad:drone-deployer
+#
+# 2. Expected result (SHOULD FAIL):
+#    Error from server (Forbidden): deployments.apps "ci-cd-app" is forbidden:
+#    User "system:serviceaccount:staging-ahmad:drone-deployer" cannot delete
+#    resource "deployments" in API group "apps" in the namespace "staging-ahmad"
+#
+# 3. This PROVES PoLP is working correctly ✅
+#
+# ========================================================
+# WHY THIS PROVES PoLP:
+# ========================================================
+# - ServiceAccount can UPDATE/PATCH deployments (needed for CI/CD)
+# - ServiceAccount CANNOT DELETE deployments (prevents accidental deletion)
+# - Follows principle of "least privilege" - only permissions needed for job
+# - Production safety: No single automation can destroy production deployments
+# ========================================================
